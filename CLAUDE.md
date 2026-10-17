@@ -276,3 +276,19 @@ searching for "OKF" only `git diff --stat` file names of the instructor branches
 Grading: first agent per the class spec 70%; a second, self-designed agent 30%; **+20** for an A2A application;
 **+20** for using "OKF" to build knowledge for an agent. Presented by recorded video.
 "OKF" is not mentioned in the repo, the slides or the instructor branches — meaning to be confirmed with the user.
+
+### Slide alignment — graph matches slide 7 (after the user shared the workshop slides)
+
+Audit of the slides vs. the project found the graph differed from slide 7 in two names. Changed on
+`feature/ezstore-agent-develop` (behaviour unchanged):
+- New first node **`load_context`** (code): `START → load_context → classify_intent → route`. It stores the user's text,
+  the pending-request hint and the last few messages in `state["turn_context"]`; the classifier instruction and `route`
+  read from there (fallback: compute it if missing).
+- Refusal node renamed `refuse` → **`off_topic`** (route name too).
+- Docs updated (README.md, README.zh-TW.md, agent/README.md). 36 tests pass; live clarify→complete works; agent
+  container rebuilt and verified through `/agent-api` (off-topic refusal). Seed reloaded afterwards.
+
+Other audit results: fork done (see bonus log); 4.4 grading + eval labs + one-page report still blocked on Vertex AI;
+`.env` uses `gemini-3.5-flash` because of the free-tier quota (code default is `gemini-3.8-flash`); AI-tool MCP
+setup (Context7, ADK Docs, Playwright MCP, `agents-cli setup`) not configured — docs were read from the installed
+agents-cli skills and the ADK source instead.

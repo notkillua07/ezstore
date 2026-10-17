@@ -267,7 +267,7 @@ User → React Chat UI (/agent) → nginx /agent-api/ → agent:8080 (ADK FastAP
 **Workflow graph** (`agent/quotation_agent/agent.py`, app name `quotation_agent`):
 
 ```
-START → classify_intent (LlmAgent, output_schema=IntentResult) → route (code)
+START → load_context (code) → classify_intent (LlmAgent, output_schema=IntentResult) → route (code)
           route ─┬─ get_quotation ──────────────┐
                  ├─ list_customer_quotations ───┤
                  ├─ duplicate_quotation ────────┤   each operation node calls exactly one MCP tool
@@ -275,7 +275,7 @@ START → classify_intent (LlmAgent, output_schema=IntentResult) → route (code
                  ├─ adjust_total_price ─────────┼─→ respond   (the only node the Chat UI displays)
                  ├─ convert_to_order ───────────┤
                  ├─ clarify      (missing fields → ask; request kept in state.pending_request)
-                 ├─ refuse       (off-topic → fixed refusal, decided by code)
+                 ├─ off_topic    (off-topic → fixed refusal, decided by code)
                  └─ report_error (no credentials / quota / model error → clear message)
 ```
 

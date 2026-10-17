@@ -51,7 +51,7 @@ def test_lowercase_quotation_number_is_normalised():
 def test_off_topic_is_refused_and_clears_pending():
     pending = {"operation": "duplicate_quotation", "args": {}, "missing": ["quotation_number"]}
     d = decide(intent("off_topic"), "今天天氣如何？", pending)
-    assert d.route == "refuse"
+    assert d.route == "off_topic"
     assert d.pending is None
 
 
@@ -62,7 +62,7 @@ def test_off_topic_is_refused_and_clears_pending():
 def test_customer_or_product_crud_is_refused_even_if_llm_disagrees(text):
     assert is_non_quotation_crud(text)
     d = decide(intent("get_quotation", quotation_number=None), text, None)
-    assert d.route == "refuse"
+    assert d.route == "off_topic"
 
 
 @pytest.mark.parametrize(

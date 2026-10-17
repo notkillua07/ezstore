@@ -129,7 +129,7 @@ def decide(
         intent = "off_topic"
 
     if intent == "off_topic":
-        return Decision("refuse", {"english": english}, None, english)
+        return Decision("off_topic", {"english": english}, None, english)
 
     args = _clean_args(result, user_text, history_text)
     operation: str | None
@@ -146,7 +146,7 @@ def decide(
 
     if operation is None:
         if not args:
-            return Decision("refuse", {"english": english}, None, english)
+            return Decision("off_topic", {"english": english}, None, english)
         missing = ["operation"]
         new_pending = {"operation": None, "args": args, "missing": []}
         return Decision(
