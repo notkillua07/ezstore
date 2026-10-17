@@ -1,0 +1,30 @@
+{
+  "eval_cases": [
+    {
+      "eval_case_id": "off_topic_weather",
+      "prompt": {"role": "user", "parts": [{"text": "今天台北天氣如何？"}]},
+      "reference": {"response": {"role": "model", "parts": [{"text": "禮貌拒絕，說明只能協助報價單相關操作，不呼叫任何工具，也不回答天氣。"}]}}
+    },
+    {
+      "eval_case_id": "off_topic_customer_crud",
+      "prompt": {"role": "user", "parts": [{"text": "幫我新增一個客戶，名稱叫做韋恩企業，電話 02-1234-5678"}]},
+      "reference": {"response": {"role": "model", "parts": [{"text": "禮貌拒絕，說明只能協助報價單相關操作，無法新增或修改客戶資料，不呼叫任何工具。"}]}}
+    },
+    {
+      "eval_case_id": "clarify_then_complete",
+      "agent_data": {
+        "turns": [
+          {
+            "turn_index": 0,
+            "events": [
+              {"author": "user", "content": {"role": "user", "parts": [{"text": "我要查詢報價單"}]}},
+              {"author": "quotation_agent", "content": {"role": "model", "parts": [{"text": "請提供報價單編號（例如 QT-20260330-001），以便為您查詢報價單。"}]}},
+              {"author": "user", "content": {"role": "user", "parts": [{"text": "QT-20260330-001"}]}}
+            ]
+          }
+        ]
+      },
+      "reference": {"response": {"role": "model", "parts": [{"text": "接續前一輪的查詢報價單，回覆 QT-20260330-001 的詳細資訊與品項清單，並附純文字系統連結；不可再次追問報價單編號。"}]}}
+    }
+  ]
+}

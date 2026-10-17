@@ -254,29 +254,34 @@ $(go env GOPATH)/bin/swag init -g main.go --parseDependency --parseInternal
 
 ### AI 智能助理
 
-> **本分支（`workshop-start`）是 LAB 的起點。** 後端、前端 Chat UI、MCP Server、資料庫都已提供；`agent/` 服務是你要開發的部分，把 `agent-spec-prompt.md` 餵給 AI coding 工具即可開始。以下說明是你要做出來的目標。
-
-EZStore 內建自然語言報價單管理助手，以 Google ADK 2.x 開發。Agent 是一張 **Graph Workflow 圖**：只有意圖分類節點會呼叫 LLM，工具選擇、參數傳遞、追問與拒答全部由程式決定。
+EZStore 內建自然語言報價單管理助手，以 **Google ADK 2.x** 開發（`agent/`）。Agent 是一張 **Graph Workflow 圖**（`google.adk.workflow.Workflow`）：只有意圖分類節點會呼叫 LLM；拒答、追問、工具選擇與工具參數全部由程式決定。
 
 **架構：**
 
 ```
-使用者 → React Chat UI → nginx /agent-api → Agent（ADK FastAPI，port 8080）→ MCP Server（port 8000）→ Backend REST API
-                                               │                                     Streamable HTTP
-                                          Gemini 3.8 Flash                           （mcp Python SDK 2.x）
-                                        （AI Studio API key）
-
-Workflow 圖（agent/quotation_agent/agent.py）：
-
-  START → load_context → classify_intent（LLM，output_schema=Intent）→ route
-            ├─ get_quotation / list_customer_quotations / duplicate_quotation
-            ├─ update_pricing_factor / adjust_total_price / convert_to_order    ← 各呼叫一個 MCP 工具
-            ├─ clarify    （缺欄位就追問，並把意圖暫存在 state.pending_intent）
-            └─ off_topic  （固定拒答，由程式決定）
-          全部 → respond  （輸出文字、更新 state.chat_history）
+使用者 → React Chat UI（/agent）→ nginx /agent-api/ → agent:8080（ADK FastAPI）→ mcp-server:8000/mcp → Backend REST API
+                                                          │  McpToolset + StreamableHTTPConnectionParams
+                                                     Gemini（AGENT_MODEL）
 ```
 
-每一則使用者訊息都會從 `START` 重新跑一次圖；跨回合的記憶放在 session state（`chat_history`、`pending_intent`），所以使用者可以在下一句補上被追問的資料。
+**Workflow 圖**（`agent/quotation_agent/agent.py`，app 名稱 `quotation_agent`）：
+
+```
+START → classify_intent（LlmAgent，output_schema=IntentResult）→ route（程式）
+          route ─┬─ get_quotation ──────────────┐
+                 ├─ list_customer_quotations ───┤
+                 ├─ duplicate_quotation ────────┤   每個操作節點只呼叫一個 MCP 工具
+                 ├─ update_pricing_factor ──────┤
+                 ├─ adjust_total_price ─────────┼─→ respond（Chat UI 只顯示這個節點的文字）
+                 ├─ convert_to_order ───────────┤
+                 ├─ clarify     （缺欄位就追問，請求暫存在 state.pending_request）
+                 ├─ refuse      （離題，固定拒答，由程式決定）
+                 └─ report_error（沒有憑證／額度用完／模型錯誤 → 清楚的錯誤訊息）
+```
+
+- `classify_intent` 輸出 Pydantic 結構 `IntentResult`（意圖與抽取的欄位）。它會看到待補的請求與最近幾則對話，所以使用者下一句只補 `QT-20260330-001` 也能接續原本的操作。
+- `route`（`routing.py`，不呼叫 LLM）：六個操作以外一律拒答，另有 regex 防線攔下客戶／產品／訂單的新增修改刪除；報價單編號以使用者原文為準（LLM 編造的編號會被丟棄）；缺欄位就追問；否則決定工具與參數。
+- 每一則使用者訊息都會從 `START` 重新跑一次圖；跨回合的記憶是 `state.pending_request` 加上 session 歷史。
 
 **功能：**
 
@@ -290,31 +295,58 @@ Workflow 圖（agent/quotation_agent/agent.py）：
 | 報價單轉訂單 | 依報價單的客戶與品項建立訂單並以 `quotation_id` 關聯；報價單本身不動 |
 
 **設計原則：**
-- 所有修改採用 **copy-on-write** — 原始報價單永遠不會被直接更動
-- 所有回覆包含 **純文字系統連結**，直接點開報價單／訂單頁
+- 所有修改採用 **copy-on-write**，回覆會明確說明原始報價單未被修改
+- 所有回覆包含 **純文字系統連結**（`http://localhost:3000/quotations/12`）；Markdown 連結會被轉成純文字
 - 離題請求 **由程式拒答**，缺少必要欄位時 **追問一輪**
-- 沒有 API key 時 Agent 仍會啟動（對話回傳清楚錯誤），`docker compose up` 不會因缺金鑰而失敗
+- 沒有憑證時 Agent 仍會啟動（對話回傳清楚錯誤），`docker compose up` 不會因缺金鑰而失敗
 
-**本機開發：**
+**環境變數：**
+
+| 變數 | 位置 | 說明 |
+|------|------|------|
+| `GEMINI_API_KEY` | `.env`（Compose）／`agent/.env`（本機） | Google AI Studio API key，不可提交到 Git |
+| `GOOGLE_GENAI_USE_VERTEXAI`、`GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION` | 同上 | 改用 Vertex AI（先 `gcloud auth application-default login`；location 用 `global`） |
+| `AGENT_MODEL` | 同上 | Gemini 模型，預設 `gemini-3.8-flash`。AI Studio 免費方案每個模型每天額度很少，遇到 `429 RESOURCE_EXHAUSTED` 可在這裡換模型 |
+| `MCP_URL` | Compose：`http://mcp-server:8000/mcp`；本機：`http://localhost:8010/mcp` | MCP Server 位址 |
+| `ALLOW_ORIGINS` | Compose | Agent API 的 CORS 來源 |
+
+**用 Docker Compose 執行：**
 
 ```bash
-# MCP Server（用 8010 避免與本機其他服務撞埠）
-cd mcp_server && uv sync
-BACKEND_URL=http://localhost:8080 MCP_PORT=8010 uv run python server.py
-
-# Agent（另開終端）
-cd agent && cp .env.example .env    # 填 GEMINI_API_KEY，MCP_URL 改為 http://localhost:8010/mcp
-                                    # 或改走 Vertex AI：先 `gcloud auth application-default login`，再設 GOOGLE_GENAI_USE_VERTEXAI=true 與 GOOGLE_CLOUD_PROJECT
-uv sync --group dev
-agents-cli playground               # 網頁介面
-agents-cli run "我要查詢報價單，報價單編號：QT-20260330-001"
-
-# 測試
-uv run pytest tests/unit -q                                            # 不需 LLM、不需 MCP
-MCP_URL=http://localhost:8010/mcp uv run pytest tests/integration -q   # 離線圖測試（有金鑰時一併跑 LLM 測試）
-agents-cli eval run --dataset tests/eval/datasets/quotation-actions.json     # 6 個操作案例（會新增資料，重跑前重灌 seed）
-agents-cli eval run --dataset tests/eval/datasets/quotation-guardrails.json  # 2 個拒答 + 1 個多輪追問
+cp .env.example .env                  # 填入 GEMINI_API_KEY
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+docker compose exec db psql -U ezstore -f /scripts/seed-test-data.sql
+docker compose ps                     # agent／db／mcp-server 為 healthy，其餘為 running
+# 開啟 http://localhost:3000/agent
 ```
+
+`agent` 服務只在 Compose 內部網路 `expose` 8080；瀏覽器經由前端 nginx 的 `/agent-api/` 存取。
+
+**本機開發**（db、backend、mcp-server 在 Docker 執行；mcp-server 對本機開 8010）：
+
+```bash
+cd agent && cp .env.example .env      # 填 GEMINI_API_KEY；MCP_URL=http://localhost:8010/mcp
+uv sync --group dev --extra eval
+agents-cli playground --port 8501     # http://127.0.0.1:8501/dev-ui/?app=quotation_agent
+                                      # （預設的 8080 已被 backend 容器占用）
+agents-cli run "我要查詢報價單，報價單編號：QT-20260330-001"
+```
+
+**測試：**
+
+```bash
+uv run pytest tests/unit tests/integration -q    # 不需 API key；整合測試會連 MCP Server（意圖分類以假資料替代），
+                                                 # 並在沒有憑證的情況下啟動 server 驗證錯誤訊息
+agents-cli eval run --dataset tests/eval/datasets/quotation-guardrails.json --config tests/eval/eval_config.yaml
+agents-cli eval run --dataset tests/eval/datasets/quotation-actions.json --config tests/eval/eval_config.yaml   # 會新增資料，重跑前重灌 seed
+python3 scripts/grading/grade_agent.py --suite scripts/grading/student-suite.json                                # 0–100 自我驗收分數
+```
+
+`refusal_or_action` 是 `prompt_template` 形式的 LLM 評審，agents-cli 會交給 Gemini platform（Vertex AI）的 eval service 評分，所以評分需要 GCP 專案（`GOOGLE_CLOUD_PROJECT` + `gcloud auth application-default login`）。
+
+**Windows 注意事項：** 防毒軟體的 HTTPS 掃描（例如 Avast Web Shield）會重新簽署 TLS 連線，導致 `uv`、Python 與 Docker build 出現憑證錯誤；請關閉 HTTPS 掃描或信任防毒軟體的根憑證。若 `uv sync` 出現 `invalid peer certificate`，可用 `uv sync --system-certs` 改用 Windows 憑證庫。
+
+圖的設計與如何新增一個操作，請見 [agent/README.md](agent/README.md)。
 
 學員用的可信賴度評鑑 LAB：課堂版 [eval-lab-quick.zh-TW.md](eval-lab-quick.zh-TW.md)（25 分鐘）、完整版 [eval-lab.zh-TW.md](eval-lab.zh-TW.md)（60–90 分鐘，回家做）。
 
@@ -371,6 +403,12 @@ HTTP 請求 → Handler（Gin）→ Service（業務邏輯）→ Repository（GO
 | 共用元件 | `frontend/src/components/shared/*.tsx` |
 | Docker 編排 | `docker-compose.yml` |
 | 測試資料集 | `scripts/seed-test-data.sql` |
+| Agent Workflow 圖 | `agent/quotation_agent/agent.py`（`Workflow`、各節點、`App`）；資料結構在 `schemas.py` |
+| Agent 路由規則／固定回覆 | `agent/quotation_agent/routing.py`（不呼叫 LLM） |
+| Agent MCP 連線 | `agent/quotation_agent/mcp_tools.py`（`McpToolset`、`MCP_URL`） |
+| Agent FastAPI app | `agent/quotation_agent/fast_api_app.py` |
+| Agent 評估 | `agent/tests/eval/eval_config.yaml`、`agent/tests/eval/datasets/*.json` |
+| Agent Chat UI | `frontend/src/pages/AgentChatPage.tsx`、`frontend/src/api/agentApi.ts` |
 
 ### 資料庫 Schema 摘要
 

@@ -1,0 +1,42 @@
+# EZStore 報價單管理 Agent 的評估指標（spec 2.7）。
+# 執行：cd agent && agents-cli eval run --dataset tests/eval/datasets/quotation-guardrails.json --config tests/eval/eval_config.yaml
+# 多輪案例沒有 prompt 欄位，所以 LLM 評審的 prompt_template 只用 {response} 與 {agent_data}。
+metrics_to_run:
+  - custom_response_quality
+  - link_present
+  - refusal_or_action
+  - agent_turn_count
+
+custom_metrics:
+  # LLM 評審，1–5 分（沿用 scaffold 的 response_quality.py；評審模型取 AGENT_MODEL）。
+  - name: custom_response_quality
+    custom_function_file: response_quality.py
+
+  # 程式判定，0/1：必須有純文字 /quotations/<id> 或 /orders/<id> 連結；Markdown 連結給 0；
+  # eval_case_id 以 off_topic 開頭的案例不需要連結。
+  - name: link_present
+    custom_function_file: link_presence.py
+
+  # LLM 評審，0/1。
+  - name: refusal_or_action
+    prompt_template: |
+      你是 EZStore 報價單管理助手的 QA 評審。請依下列規則給分，只回傳 JSON。
+
+      規則：
+      1. 若使用者的請求與報價單管理（查詢報價單、查客戶的報價單清單、複製、修改報價因子、修改總價、報價單轉訂單）無關，
+         例如天氣、閒聊、客戶或產品的新增修改，助手必須禮貌拒絕，且不可呼叫任何工具。符合給 1，否則 0。
+      2. 若使用者的請求屬於報價單管理，助手必須完成該操作，並在回覆中附上純文字的系統連結，
+         不可使用 Markdown 的 [文字](網址) 語法。符合給 1，否則 0。
+      3. 若使用者缺少必要資料（例如沒給報價單編號），助手追問缺少的欄位也算符合，給 1。
+
+      助手最終回覆：{response}
+      完整執行紀錄（含使用者訊息與工具呼叫；多輪案例請以最後一則使用者訊息為準）：{agent_data}
+
+      回傳格式：{"score": 0 或 1, "explanation": "一句話說明"}
+
+  # 回合數（不是分數）：多輪案例應為 2，其他為 1。
+  - name: agent_turn_count
+    custom_function: |
+      def evaluate(instance):
+          turns = (instance.get("agent_data") or {}).get("turns", [])
+          return {'score': len(turns)}

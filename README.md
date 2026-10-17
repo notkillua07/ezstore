@@ -254,29 +254,34 @@ profit_rate  = profit ÷ total_price
 
 ### AI Agent
 
-> **This branch (`workshop-start`) is the lab starting point.** The backend, frontend Chat UI, MCP Server and database are provided; the `agent/` service is what you build by feeding `agent-spec-prompt.md` to your AI coding tool. The description below is the target you are building toward.
-
-EZStore includes a natural-language quotation assistant built with Google ADK 2.x. The agent is a **graph Workflow**: only one node calls the LLM (intent classification); tool selection, argument passing, clarification and refusal are all deterministic program logic.
+EZStore includes a natural-language quotation assistant built with **Google ADK 2.x** (`agent/`). The agent is a **graph Workflow** (`google.adk.workflow.Workflow`): only one node calls the LLM (intent classification); refusal, clarification, tool selection and tool arguments are all decided by program logic.
 
 **Architecture:**
 
 ```
-User → React Chat UI → nginx /agent-api → Agent (ADK FastAPI, port 8080) → MCP Server (port 8000) → Backend REST API
-                                               │                                  Streamable HTTP
-                                          Gemini 3.8 Flash                        (mcp Python SDK 2.x)
-                                        (AI Studio API key)
-
-Workflow graph (agent/quotation_agent/agent.py):
-
-  START → load_context → classify_intent (LLM, output_schema=Intent) → route
-            ├─ get_quotation / list_customer_quotations / duplicate_quotation
-            ├─ update_pricing_factor / adjust_total_price / convert_to_order    ← each calls one MCP tool
-            ├─ clarify     (missing fields → ask, keep state.pending_intent)
-            └─ off_topic   (fixed refusal, decided by code)
-          all → respond    (emit text + update state.chat_history)
+User → React Chat UI (/agent) → nginx /agent-api/ → agent:8080 (ADK FastAPI) → mcp-server:8000/mcp → backend REST API
+                                                         │  McpToolset + StreamableHTTPConnectionParams
+                                                    Gemini (AGENT_MODEL)
 ```
 
-Every user message re-runs the graph from `START`; cross-turn memory lives in session state (`chat_history`, `pending_intent`), so a user can answer a clarification question in the next message.
+**Workflow graph** (`agent/quotation_agent/agent.py`, app name `quotation_agent`):
+
+```
+START → classify_intent (LlmAgent, output_schema=IntentResult) → route (code)
+          route ─┬─ get_quotation ──────────────┐
+                 ├─ list_customer_quotations ───┤
+                 ├─ duplicate_quotation ────────┤   each operation node calls exactly one MCP tool
+                 ├─ update_pricing_factor ──────┤
+                 ├─ adjust_total_price ─────────┼─→ respond   (the only node the Chat UI displays)
+                 ├─ convert_to_order ───────────┤
+                 ├─ clarify      (missing fields → ask; request kept in state.pending_request)
+                 ├─ refuse       (off-topic → fixed refusal, decided by code)
+                 └─ report_error (no credentials / quota / model error → clear message)
+```
+
+- `classify_intent` returns a Pydantic `IntentResult` (intent + extracted fields). It sees the pending request and the last few messages, so a follow-up like `QT-20260330-001` continues the previous operation.
+- `route` (`routing.py`, no LLM) refuses anything outside the six operations, plus a regex guard for customer/product/order create-update-delete requests; takes the quotation number from the user's own text (a number the LLM invents is dropped); asks for missing fields; otherwise picks the tool and arguments.
+- Every user message re-runs the graph from `START`; cross-turn memory is `state.pending_request` plus the session history.
 
 **Capabilities:**
 
@@ -290,31 +295,58 @@ Every user message re-runs the graph from `START`; cross-turn memory lives in se
 | Convert to order | Create an order from the quotation's customer and items, linked via `quotation_id`; the quotation itself is untouched |
 
 **Key design:**
-- All modifications use **copy-on-write** — the original quotation is never changed
-- All responses include **plain-text system links** to the quotation/order detail pages
-- Off-topic requests are **refused by code**, missing fields trigger a **clarification turn**
-- Agent runs even without an API key (chat returns a clear error), so `docker compose up` never fails on a missing key
+- All modifications use **copy-on-write**; the reply states that the original quotation was not modified
+- All responses include **plain-text system links** (`http://localhost:3000/quotations/12`); Markdown links are converted to plain text
+- Off-topic requests are **refused by code**; missing fields trigger a **clarification turn**
+- The agent starts even without credentials (chat returns a clear error), so `docker compose up` never fails on a missing key
 
-**Local development:**
+**Environment variables:**
+
+| Variable | Where | Description |
+|----------|-------|-------------|
+| `GEMINI_API_KEY` | `.env` (Compose) / `agent/.env` (local) | Google AI Studio key. Never commit it |
+| `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` | same | Vertex AI instead of AI Studio (`gcloud auth application-default login`; location `global`) |
+| `AGENT_MODEL` | same | Gemini model, default `gemini-3.8-flash`. The AI Studio free tier has a small daily quota per model; switch models here if you hit `429 RESOURCE_EXHAUSTED` |
+| `MCP_URL` | Compose: `http://mcp-server:8000/mcp`; local: `http://localhost:8010/mcp` | MCP Server endpoint |
+| `ALLOW_ORIGINS` | Compose | CORS origins for the agent API |
+
+**Run with Docker Compose:**
 
 ```bash
-# MCP Server (port 8010 to avoid clashing with other local services)
-cd mcp_server && uv sync
-BACKEND_URL=http://localhost:8080 MCP_PORT=8010 uv run python server.py
-
-# Agent (in another terminal)
-cd agent && cp .env.example .env    # fill GEMINI_API_KEY, set MCP_URL=http://localhost:8010/mcp
-                                    # or Vertex AI: GOOGLE_GENAI_USE_VERTEXAI=true + GOOGLE_CLOUD_PROJECT after `gcloud auth application-default login`
-uv sync --group dev
-agents-cli playground               # web UI
-agents-cli run "我要查詢報價單，報價單編號：QT-20260330-001"
-
-# Tests
-uv run pytest tests/unit -q                       # no LLM, no MCP
-MCP_URL=http://localhost:8010/mcp uv run pytest tests/integration -q   # offline graph tests (+ LLM tests when key is set)
-agents-cli eval run --dataset tests/eval/datasets/quotation-actions.json    # 6 action cases (creates data; reseed before rerun)
-agents-cli eval run --dataset tests/eval/datasets/quotation-guardrails.json # 2 refusals + 1 multi-turn clarification
+cp .env.example .env                  # fill GEMINI_API_KEY
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+docker compose exec db psql -U ezstore -f /scripts/seed-test-data.sql
+docker compose ps                     # agent / db / mcp-server healthy, others running
+# open http://localhost:3000/agent
 ```
+
+The `agent` service only `expose`s port 8080 inside the Compose network; the browser reaches it through the frontend's nginx at `/agent-api/`.
+
+**Local development** (db, backend and mcp-server running in Docker; mcp-server is published on host port 8010):
+
+```bash
+cd agent && cp .env.example .env      # fill GEMINI_API_KEY; MCP_URL=http://localhost:8010/mcp
+uv sync --group dev --extra eval
+agents-cli playground --port 8501     # http://127.0.0.1:8501/dev-ui/?app=quotation_agent
+                                      # (the default port 8080 is taken by the backend container)
+agents-cli run "我要查詢報價單，報價單編號：QT-20260330-001"
+```
+
+**Tests:**
+
+```bash
+uv run pytest tests/unit tests/integration -q    # no API key needed; integration tests use the MCP Server
+                                                 # (classifier replaced by a fake) and start the server without credentials
+agents-cli eval run --dataset tests/eval/datasets/quotation-guardrails.json --config tests/eval/eval_config.yaml
+agents-cli eval run --dataset tests/eval/datasets/quotation-actions.json --config tests/eval/eval_config.yaml   # creates data; reseed before rerun
+python3 scripts/grading/grade_agent.py --suite scripts/grading/student-suite.json                                # 0–100 self-assessment score
+```
+
+The `refusal_or_action` metric is a `prompt_template` LLM judge, which agents-cli grades through the Gemini platform (Vertex AI) eval service, so grading needs a GCP project (`GOOGLE_CLOUD_PROJECT` + `gcloud auth application-default login`).
+
+**Windows notes:** antivirus HTTPS scanning (e.g. Avast Web Shield) re-signs TLS traffic and breaks `uv`, Python and Docker builds with certificate errors; turn HTTPS scanning off or trust the antivirus root CA. If `uv sync` fails with `invalid peer certificate`, `uv sync --system-certs` uses the Windows certificate store.
+
+See [agent/README.md](agent/README.md) for the graph design and how to add a new operation.
 
 Trustworthiness evaluation labs for learners: [eval-lab-quick.md](eval-lab-quick.md) (25 min, in class) and [eval-lab.md](eval-lab.md) (60–90 min, full version).
 
@@ -369,8 +401,9 @@ HTTP Request → Handler (Gin) → Service (business logic) → Repository (GORM
 | API clients | `frontend/src/api/*.ts` |
 | Page components | `frontend/src/pages/*.tsx` |
 | Shared components | `frontend/src/components/shared/*.tsx` |
-| Agent workflow graph | `agent/quotation_agent/agent.py` (`Workflow`, `Intent`, node functions) |
-| Agent prompts / fixed replies | `agent/quotation_agent/prompts.py` |
+| Agent workflow graph | `agent/quotation_agent/agent.py` (`Workflow`, nodes, `App`); schemas in `schemas.py` |
+| Agent routing rules / fixed replies | `agent/quotation_agent/routing.py` (no LLM) |
+| Agent MCP client | `agent/quotation_agent/mcp_tools.py` (`McpToolset`, `MCP_URL`) |
 | Agent FastAPI app | `agent/quotation_agent/fast_api_app.py` |
 | Agent eval | `agent/tests/eval/eval_config.yaml`, `agent/tests/eval/datasets/*.json` |
 | MCP Server (6 tools, mcp 2.x `MCPServer`) | `mcp_server/server.py` |
@@ -501,7 +534,7 @@ uv sync && BACKEND_URL=http://localhost:8080 MCP_PORT=8010 uv run python server.
 # Agent (reads agent/.env: GEMINI_API_KEY, MCP_URL, AGENT_MODEL)
 cd agent
 uv sync --group dev
-agents-cli playground                     # local web UI
+agents-cli playground --port 8501         # local web UI (8080 is taken by the backend)
 agents-cli run "我要查詢報價單，報價單編號：QT-20260330-001"
 uv run pytest tests/unit tests/integration -q
 agents-cli eval run                       # LLM-judged eval over tests/eval/datasets
