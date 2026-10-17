@@ -276,3 +276,34 @@ searching for "OKF" only `git diff --stat` file names of the instructor branches
 Grading: first agent per the class spec 70%; a second, self-designed agent 30%; **+20** for an A2A application;
 **+20** for using "OKF" to build knowledge for an agent. Presented by recorded video.
 "OKF" is not mentioned in the repo, the slides or the instructor branches — meaning to be confirmed with the user.
+
+**OKF = Open Knowledge Format** (Google Cloud, v0.1 June 2026, now v0.2): a knowledge bundle is a folder of Markdown
+files with YAML frontmatter (`type` required; `title`, `description`, `resource`, `tags`, `status`, `generated`,
+`verified`, `stale_after`, `sources` optional), one concept per file, linked with normal Markdown links; optional
+`index.md` / `log.md`; conformance = every concept has parseable frontmatter with a non-empty `type` (spec §11).
+Spec: https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
+
+**Plan (user approved):** second agent "EZStore Sales Advisor" on branch `feature/bonus-sales-advisor` — answers sales
+questions from an OKF bundle (+20 OKF) and delegates the six quotation operations to `quotation_agent` over A2A with
+ADK `RemoteA2aAgent` (+20 A2A). Checkpoints: B1 knowledge bundle → B2 advisor agent → B3 A2A → B4 Docker/docs/video.
+Stage 4.1–4.5 work committed first on `feature/ezstore-agent-develop` (commit 97793ff).
+
+### Bonus B1 — OKF knowledge bundle ✅ (awaiting user verification)
+
+`advisor/knowledge/ezstore/` (26 concepts):
+- `policies/` — 5 hand-written Business Rule concepts from README + backend sources: customer levels & default
+  factors (vip 0.80 / standard 0.90 / new 1.00), pricing computation, quotation lifecycle & numbering, order lifecycle
+  & convert-to-order, copy-on-write. Each has `sources` (GitHub URLs) and footnote attribution.
+- `guides/quotation-agent.md` — Agent Capability concept: the six operations and the A2A agent card URL.
+- `products/` — 20 Product concepts **generated from the live backend API** (number, name, category, supplier, list
+  price, description, unit price per customer level), with `generated`, `stale_after` (+30 days) and `sources`.
+  Product cost and customer contact data deliberately left out (internal / personal data).
+- `index.md` (root carries `okf_version: "0.2"`) + per-folder indexes, `log.md`.
+- `advisor/scripts/okf_tool.py` — `products` (regenerate from API), `index`, `validate` (§11 conformance + broken-link
+  warnings), `all`. Result: `26 concepts, 0 errors`, no broken links.
+- Trust tier: all concepts are "unverified" (no `verified` key) until a human reviews them and adds
+  `verified: {by: "human:<name>", at: ...}`.
+- Fix after user feedback ("links not found" when clicking in VS Code): links were written in the spec's
+  bundle-absolute form (`/policies/x.md`), which editors resolve from the drive root. Switched every link to the
+  relative form (`../policies/x.md`, also allowed by OKF §6.1); `okf_tool.py` now emits relative links and the
+  validator resolves both forms. Still `26 concepts, 0 errors`, no broken links.
