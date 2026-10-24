@@ -1,15 +1,16 @@
 """EZStore 報價單管理 Agent：ADK Graph Workflow。
 
-    START → classify_intent (LLM) → route ─┬─ get_quotation ────────────┐
-                                           ├─ list_customer_quotations ─┤
-                                           ├─ duplicate_quotation ──────┤
-                                           ├─ update_pricing_factor ────┤
-                                           ├─ adjust_total_price ───────┼─→ respond
-                                           ├─ convert_to_order ─────────┤
-                                           ├─ clarify ──────────────────┤
-                                           ├─ refuse ───────────────────┤
-                                           └─ report_error ─────────────┘
+    START → load_context → classify_intent (LLM) → route ─┬─ get_quotation ────────────┐
+                                                          ├─ list_customer_quotations ─┤
+                                                          ├─ duplicate_quotation ──────┤
+                                                          ├─ update_pricing_factor ────┤
+                                                          ├─ adjust_total_price ───────┼─→ respond
+                                                          ├─ convert_to_order ─────────┤
+                                                          ├─ clarify ──────────────────┤
+                                                          ├─ off_topic ────────────────┤
+                                                          └─ report_error ─────────────┘
 
+load_context 收集這一輪的上下文（使用者原文、待補請求、最近對話）存進 state["turn_context"]。
 只有 classify_intent 呼叫 LLM。route 用程式決定要拒答、追問，或呼叫哪個 MCP 工具與參數。
 前端只顯示 respond 節點的文字（見 frontend/src/api/agentApi.ts），所以每條路徑最後都經過 respond。
 """
@@ -108,13 +109,44 @@ def recent_history(events, current_text: str) -> list[tuple[str, str]]:
     return items[-_HISTORY_LIMIT:]
 
 
+def _content_text(content: types.Content | None) -> str:
+    if not content or not content.parts:
+        return ""
+    return "".join(p.text or "" for p in content.parts)
+
+
+def build_turn_context(events, user_text: str, pending: dict | None) -> dict:
+    """這一輪的上下文：給 classify_intent 的提示，以及給 route 驗證編號用的使用者先前訊息。"""
+    history = recent_history(events, user_text)
+    return {
+        "user_text": user_text,
+        "pending_hint": routing.pending_hint(pending),
+        "history": "\n".join(f"{who}：{text[:300]}" for who, text in history) or "（無）",
+        "earlier_user_text": "\n".join(text for who, text in history if who == "使用者"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 0. 收集上下文節點（程式）
+# ---------------------------------------------------------------------------
+
+
+def load_context(ctx: Context, node_input: types.Content) -> Event:
+    """把使用者原文、待補請求與最近對話整理進 state["turn_context"]，再把原文交給 classify_intent。"""
+    user_text = _content_text(node_input)
+    turn_context = build_turn_context(
+        ctx.session.events, user_text, ctx.state.get("pending_request")
+    )
+    return Event(output=user_text, state={"turn_context": turn_context})
+
+
 def classify_instruction(ctx: ReadonlyContext) -> str:
-    current = "".join(p.text or "" for p in (ctx.user_content.parts if ctx.user_content else []))
-    history = recent_history(ctx.session.events, current)
-    history_text = "\n".join(f"{who}：{text[:300]}" for who, text in history) or "（無）"
-    return CLASSIFY_INSTRUCTION.replace(
-        "{pending}", routing.pending_hint(ctx.state.get("pending_request"))
-    ).replace("{history}", history_text)
+    turn_context = ctx.state.get("turn_context") or build_turn_context(
+        ctx.session.events, _content_text(ctx.user_content), ctx.state.get("pending_request")
+    )
+    return CLASSIFY_INSTRUCTION.replace("{pending}", turn_context["pending_hint"]).replace(
+        "{history}", turn_context["history"]
+    )
 
 
 def _has_credentials() -> bool:
@@ -196,20 +228,15 @@ classify_intent = LlmAgent(
 # ---------------------------------------------------------------------------
 
 
-def _user_text(ctx: Context) -> str:
-    content = ctx.user_content
-    if not content or not content.parts:
-        return ""
-    return "".join(p.text or "" for p in content.parts)
-
-
 def route(ctx: Context, node_input: IntentResult) -> Event:
-    user_text = _user_text(ctx)
-    earlier_user_text = "\n".join(
-        text for who, text in recent_history(ctx.session.events, user_text) if who == "使用者"
+    turn_context = ctx.state.get("turn_context") or build_turn_context(
+        ctx.session.events, _content_text(ctx.user_content), ctx.state.get("pending_request")
     )
     decision = routing.decide(
-        node_input, user_text, ctx.state.get("pending_request"), earlier_user_text
+        node_input,
+        turn_context["user_text"],
+        ctx.state.get("pending_request"),
+        turn_context["earlier_user_text"],
     )
     return Event(
         output=decision.payload,
@@ -254,7 +281,7 @@ def clarify(node_input: ClarifyRequest) -> str:
     )
 
 
-def refuse(node_input: RefuseRequest) -> str:
+def off_topic(node_input: RefuseRequest) -> str:
     return routing.refuse_message(node_input.english)
 
 
@@ -279,15 +306,15 @@ def respond(node_input: str):
 
 # ADK 2.x 的 edge 是「鏈」：tuple 依序相連；dict 是 route → 節點的路由表；
 # tuple 裡放 tuple 表示多個節點（這裡是每個分支都接到 respond）。
-branches = [*operation_nodes, clarify, refuse, report_error]
+branches = [*operation_nodes, clarify, off_topic, report_error]
 edges = [
-    ("START", classify_intent, route),
+    ("START", load_context, classify_intent, route),
     (
         route,
         {
             **{node.name: node for node in operation_nodes},
             "clarify": clarify,
-            "refuse": refuse,
+            "off_topic": off_topic,
             "error": report_error,
         },
     ),

@@ -267,7 +267,7 @@ EZStore 內建自然語言報價單管理助手，以 **Google ADK 2.x** 開發�
 **Workflow 圖**（`agent/quotation_agent/agent.py`，app 名稱 `quotation_agent`）：
 
 ```
-START → classify_intent（LlmAgent，output_schema=IntentResult）→ route（程式）
+START → load_context（程式）→ classify_intent（LlmAgent，output_schema=IntentResult）→ route（程式）
           route ─┬─ get_quotation ──────────────┐
                  ├─ list_customer_quotations ───┤
                  ├─ duplicate_quotation ────────┤   每個操作節點只呼叫一個 MCP 工具
@@ -275,7 +275,7 @@ START → classify_intent（LlmAgent，output_schema=IntentResult）→ route（
                  ├─ adjust_total_price ─────────┼─→ respond（Chat UI 只顯示這個節點的文字）
                  ├─ convert_to_order ───────────┤
                  ├─ clarify     （缺欄位就追問，請求暫存在 state.pending_request）
-                 ├─ refuse      （離題，固定拒答，由程式決定）
+                 ├─ off_topic   （離題，固定拒答，由程式決定）
                  └─ report_error（沒有憑證／額度用完／模型錯誤 → 清楚的錯誤訊息）
 ```
 

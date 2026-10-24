@@ -21,15 +21,17 @@ the ADK app is called `quotation_agent`, and the node that produces the final re
 
 The flow for every user message:
 
+0. `load_context` (code) collects this turn's context into `state["turn_context"]`: the user's text, the pending
+   request from an earlier clarification, and the last few messages.
 1. `classify_intent` is the only LLM node. It returns an `IntentResult` (intent plus extracted fields).
-   Its instruction includes the pending request and the last few messages, so a short follow-up can continue a task.
+   Its instruction includes the context from `load_context`, so a short follow-up can continue a task.
 2. `route` is plain code. It decides between refusing, asking for missing data, and calling one of the six tools,
    and it builds the tool arguments.
 3. One of the branch nodes runs:
    - six operation nodes, one per MCP tool: `get_quotation`, `list_customer_quotations`, `duplicate_quotation`,
      `update_pricing_factor`, `adjust_total_price`, `convert_to_order`
    - `clarify` asks for missing fields and keeps the request in `state.pending_request`
-   - `refuse` returns the fixed off-topic reply
+   - `off_topic` returns the fixed refusal
    - `report_error` explains missing credentials, quota limits or model errors
 4. `respond` receives the branch text, turns any Markdown link into a plain link, and emits the reply.
 
@@ -45,7 +47,7 @@ Writing edges in ADK 2.11: a tuple is a chain, a dict is a routing table, and a 
 
     ("START", classify_intent, route)
     (route, {"get_quotation": get_quotation_node, "clarify": clarify, ...})
-    ((get_quotation_node, clarify, refuse, ...), respond)
+    ((get_quotation_node, clarify, off_topic, ...), respond)
 
 The three-item form `(source, target, "route")` shown in some older docs is rejected by ADK 2.11.
 
@@ -90,9 +92,10 @@ ADK app 名稱必須是 `quotation_agent`，最終回覆節點必須叫 `respond
 
 每一則使用者訊息都從 START 重新跑一次：
 
-1. `classify_intent`：唯一呼叫 LLM 的節點，輸出 `IntentResult`（意圖與抽取的欄位）。指令中帶入待補請求與最近幾則對話，讓簡短的補充訊息能接續原本的操作。
+0. `load_context`（程式）：把這一輪的上下文存進 `state["turn_context"]`：使用者原文、先前追問留下的待補請求、最近幾則對話。
+1. `classify_intent`：唯一呼叫 LLM 的節點，輸出 `IntentResult`（意圖與抽取的欄位）。指令中帶入 `load_context` 整理的上下文，讓簡短的補充訊息能接續原本的操作。
 2. `route`：純程式，決定拒答、追問，或呼叫六個工具之一，並組好工具參數。
-3. 分支節點：六個操作節點（各呼叫一個 MCP 工具）、`clarify`（追問並把請求存進 `state.pending_request`）、`refuse`（固定拒答）、`report_error`（憑證、額度或模型錯誤的說明）。
+3. 分支節點：六個操作節點（各呼叫一個 MCP 工具）、`clarify`（追問並把請求存進 `state.pending_request`）、`off_topic`（固定拒答）、`report_error`（憑證、額度或模型錯誤的說明）。
 4. `respond`：把 Markdown 連結轉成純文字連結後輸出回覆。
 
 由程式（而非提示詞）保證的規則：六個操作以外一律拒答，另有 regex 防線攔下客戶／產品／訂單的新增修改刪除；報價單編號必須出現在使用者自己的訊息裡，LLM 編造的編號會被丟棄並改為追問；修改類操作一律作用在複本上，回覆會說明原始報價單未被修改。
