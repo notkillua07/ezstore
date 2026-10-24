@@ -14,7 +14,9 @@ from google.adk.apps import App
 from google.adk.models import Gemini
 from google.genai import types
 
-from .knowledge import list_knowledge, read_concept, search_knowledge
+from google.adk.agents.readonly_context import ReadonlyContext
+
+from .knowledge import list_knowledge, read_concepts, search_knowledge
 
 APP_NAME = "sales_advisor"
 MODEL = os.environ.get("ADVISOR_MODEL") or os.environ.get("AGENT_MODEL", "gemini-3.8-flash")
@@ -38,7 +40,9 @@ INSTRUCTION = """\
 You are the EZStore Sales Advisor (業務顧問) for the sales team of an office-supplies company.
 
 Knowledge questions (policies, customer levels, pricing rules, quotation and order statuses, products and prices):
-- Always look the answer up first: call search_knowledge, then read_concept on the best match. Never answer from memory.
+- Always look the answer up first. The knowledge index below lists every concept: pick all relevant concept IDs and
+  call read_concepts ONCE with all of them. Use search_knowledge only if the index does not make the choice clear.
+  Never answer from memory.
 - Answer only with what the concepts say. If the knowledge bundle does not cover it, say so plainly.
 - End the answer with the concepts you used, as plain text, for example: 來源：policies/customer-levels
 - When you calculate a price, show the formula and numbers (unit price = list price × pricing factor).
@@ -53,6 +57,19 @@ knowledge and quotation work.
 Reply in the user's language (Traditional Chinese or English). Write links as plain URLs, never Markdown [text](url).
 """
 
+async def warm_up() -> None:
+    """Connect and authenticate to the model once at start-up; the first call in a fresh container is very slow."""
+    try:
+        await root_agent.model.api_client.aio.models.count_tokens(model=MODEL, contents="ping")
+    except Exception as e:  # noqa: BLE001 — never block start-up on this
+        print(f"advisor warm-up skipped: {e}")
+
+
+def advisor_instruction(ctx: ReadonlyContext) -> str:
+    """Instruction plus the knowledge index, so the model can read the right concepts in a single tool call."""
+    return f"{INSTRUCTION}\nKnowledge index (concept ID | title | description):\n{list_knowledge()}\n"
+
+
 root_agent = Agent(
     name=APP_NAME,
     model=Gemini(
@@ -60,10 +77,14 @@ root_agent = Agent(
         retry_options=types.HttpRetryOptions(attempts=5, initial_delay=1.0, max_delay=16.0, exp_base=2.0),
     ),
     description="EZStore sales advisor: answers from the OKF knowledge bundle, delegates quotation work over A2A.",
-    instruction=INSTRUCTION,
-    tools=[list_knowledge, search_knowledge, read_concept],
+    instruction=advisor_instruction,
+    tools=[read_concepts, search_knowledge],
     sub_agents=[quotation_agent],
-    generate_content_config=types.GenerateContentConfig(temperature=0.2),
+    generate_content_config=types.GenerateContentConfig(
+        temperature=0.2,
+        # Looking up and quoting policies needs little reasoning; low thinking keeps each step fast.
+        thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+    ),
 )
 
 app = App(root_agent=root_agent, name=APP_NAME)

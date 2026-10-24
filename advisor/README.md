@@ -5,7 +5,7 @@ quotation work to the first agent (`quotation_agent`) over the **A2A protocol**.
 
 ```
 User ─▶ sales_advisor (ADK LlmAgent, Gemini)
-          ├─ tools: list_knowledge · search_knowledge · read_concept ─▶ knowledge/ezstore (OKF v0.2 bundle)
+          ├─ tools: read_concepts · search_knowledge (index in the prompt)─▶ knowledge/ezstore (OKF v0.2 bundle)
           └─ sub-agent: quotation_agent (RemoteA2aAgent) ──A2A──▶ agent:8080/a2a/quotation_agent ─▶ MCP ─▶ backend
 ```
 
@@ -20,7 +20,7 @@ User ─▶ sales_advisor (ADK LlmAgent, Gemini)
 | Path | Purpose |
 |---|---|
 | `sales_advisor/agent.py` | The advisor (`LlmAgent`), its instruction, and the `RemoteA2aAgent` for `quotation_agent` |
-| `sales_advisor/knowledge.py` | Reads the OKF bundle: `list_knowledge`, `search_knowledge`, `read_concept`, trust tier |
+| `sales_advisor/knowledge.py` | Reads the OKF bundle: `read_concepts`, `search_knowledge`, `read_concept`, `list_knowledge`, trust tier |
 | `knowledge/ezstore/` | OKF v0.2 bundle: 5 policies, 1 agent guide, 20 products (index.md, log.md) |
 | `scripts/okf_tool.py` | Regenerates product concepts from the backend API, rebuilds index.md, validates the bundle |
 | `a2a/quotation_agent_card.json` | The quotation agent's A2A card for Docker (see "A2A notes") |

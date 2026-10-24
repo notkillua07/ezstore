@@ -74,6 +74,15 @@ def search_knowledge(query: str) -> str:
     )
 
 
+def read_concepts(concept_ids: list[str]) -> str:
+    """Read several concepts in full in one call, each with its sources and trust tier.
+
+    Args:
+        concept_ids: concept IDs from the knowledge index, for example ["policies/quotation-lifecycle", "policies/copy-on-write"].
+    """
+    return "\n\n=====\n\n".join(read_concept(cid) for cid in concept_ids[:6])
+
+
 def read_concept(concept_id: str) -> str:
     """Read one concept in full, with its sources and trust tier.
 

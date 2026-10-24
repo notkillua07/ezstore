@@ -399,3 +399,10 @@ after it repointed the remote, so the user ran the commit/push commands.
   read-only (`${APPDATA}/gcloud/application_default_credentials.json` → `/secrets/adc.json`); root `.env` got
   `GOOGLE_CLOUD_PROJECT` and `AGENT_MODEL=gemini-3.8-flash`. `advisor/README.md` (EN + 中文). 7 unit tests pass;
   scaffold demo tests/eval removed. Seed reloaded after testing.
+
+**Advisor speed fix (user: "the process is so long"):** 「已發布的報價單還能修改嗎？」 took **149 s** — 4 sequential model calls
+(search → read → read → answer), each ~35 s mostly Gemini 3 "thinking". Changes: the knowledge index (26 one-line
+entries) is put in the instruction (`InstructionProvider`), new tool `read_concepts([...])` reads several concepts in one
+call, and `thinking_config=ThinkingConfig(thinking_level=LOW)`. Result: 1 tool call, **15 s** warm, same answer and
+sources. Cold start (first request in a fresh container) was **273 s** → a free `count_tokens` warm-up in the advisor's
+FastAPI start-up → **40 s**. (Applied to the advisor only; the graded quotation agent is unchanged.)

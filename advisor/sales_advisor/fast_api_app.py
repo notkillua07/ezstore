@@ -54,6 +54,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         task_store=InMemoryTaskStore(),
         rpc_path=f"/a2a/{adk_app.name}",
     )
+    from sales_advisor.agent import warm_up
+
+    await warm_up()
     yield
 
 
