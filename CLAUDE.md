@@ -292,3 +292,44 @@ Other audit results: fork done (see bonus log); 4.4 grading + eval labs + one-pa
 `.env` uses `gemini-3.5-flash` because of the free-tier quota (code default is `gemini-3.8-flash`); AI-tool MCP
 setup (Context7, ADK Docs, Playwright MCP, `agents-cli setup`) not configured — docs were read from the installed
 agents-cli skills and the ADK source instead.
+
+### AI-tool setup (slide 11: skills / MCP) — done on user request
+
+- **agents-cli skills:** `agents-cli setup --agent claude-code --skip-auth` → 7 skills in `~/.claude/skills`
+  (`google-agents-cli-adk-code`, `-deploy`, `-eval`, `-observability`, `-publish`, `-scaffold`, `-workflow`).
+- **MCP servers** in a project `.mcp.json` (machine-specific paths, so excluded via `.git/info/exclude`, not committed):
+  - `adk-docs` — `uvx --from mcpdoc --with "mcp<2" mcpdoc --urls AgentDevelopmentKit:https://adk.dev/llms.txt --transport stdio`
+    (command from https://adk.dev/tutorials/coding-with-ai/; full path to `uvx.exe` because it is not on VS Code's PATH)
+  - `context7` — remote HTTP server `https://mcp.context7.com/mcp`
+  - `playwright` — `cmd /c npx -y @playwright/mcp@latest` (`cmd /c` needed for npx on Windows)
+  - Checked: mcpdoc starts, Context7 answers `initialize` with HTTP 200, Playwright MCP starts.
+- Note: these were set up after the agent was built; during development the same documentation was read from the
+  agents-cli package's bundled skill files and the installed ADK source.
+
+### Stage 4.4 — Eval + self-grading ✅ (unblocked with Vertex AI)
+
+Setup (user): GCP project `ezstore-eval-123456` with billing, Vertex AI API enabled, gcloud CLI installed
+(`winget install -e --id Google.CloudSDK --source winget`), `gcloud auth application-default login`,
+`gcloud config set project …`, `gcloud auth application-default set-quota-project …`.
+`agent/.env` switched to Vertex AI: `GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION=global`,
+`AGENT_MODEL=gemini-3.8-flash` (the spec model; AI Studio key line commented out, not deleted).
+
+Results:
+- First guardrails run on the new project: `refusal_or_action` errored with 404 "new project, expect a delay" (Vertex AI
+  service agent still being provisioned) — rerun ~15 min later: **3/3 cases, quality 5.0, link_present 1.0,
+  refusal_or_action 1.0**.
+- `clarify_then_complete` dataset fixed: earlier turns split into `turn_index` 0 (user + agent) and 1 (user), so
+  `agent_turn_count` reports 2 as the eval lab expects.
+- Official grader `python scripts/grading/grade_agent.py --suite scripts/grading/student-suite.json`:
+  - 1 run: **93.0 / 100** (duplicate_quotation case missing → "≥3 copies" check 0/5; judge returned malformed JSON
+    on not_found_quotation → −2).
+  - `--runs 2` (as TAs grade, slide 17): **98.1 / 100** — guardrails 28.1/30, actions 50/50 (all backend checks
+    pass: original untouched, 6 copies, factor-1.5 copy, order linked), extra 20/20. Reference solution on the
+    student suite: 97.8. Report: `artifacts/grading/20261022_204934/report.md`.
+
+**Risk not yet covered — intermittent hang on Windows:** when `agents-cli eval` sends cases in parallel to its temporary
+local server (port 18080), sometimes one `/run_sse` request hangs silently until the client's read timeout. Sequential
+(`--concurrency 1`) always passes; happens with both Vertex AI and the AI Studio key and for cases that never call MCP;
+no error in the server log. Tried (and reverted): a model-client warm-up at start-up (helped partially) and a 30 s model
+timeout (worse). The grader averages over cases that ran, so a hung off-topic case doesn't lower the score, but a hung
+action case can fail a backend check. Mitigation: `--runs 2`.
