@@ -363,3 +363,39 @@ local server (port 18080), sometimes one `/run_sse` request hangs silently until
 no error in the server log. Tried (and reverted): a model-client warm-up at start-up (helped partially) and a 30 s model
 timeout (worse). The grader averages over cases that ran, so a hung off-topic case doesn't lower the score, but a hung
 action case can fail a backend check. Mitigation: `--runs 2`.
+
+### Fork and push (slide 10 requirement)
+
+The repo had been cloned from the instructor's repo directly. The user forked it to
+https://github.com/notkillua07/ezstore; remotes are now `origin` = the fork and `upstream` = cshliu77/ezstore.
+The user committed B1 and pushed both branches (`feature/ezstore-agent-develop` at 97793ff,
+`feature/bonus-sales-advisor` at 66be379). Claude Code's auto-mode safety check blocked the AI from committing right
+after it repointed the remote, so the user ran the commit/push commands.
+
+### Bonus B2–B4 — Sales Advisor agent, A2A, Docker ✅ (awaiting user verification)
+
+- **Scaffold:** `agents-cli scaffold create sales-advisor --agent adk --deployment-target none --prototype
+  --agent-directory sales_advisor --root-agent-name sales_advisor --agent-guidance-filename CLAUDE.md`, moved into
+  `advisor/` next to the OKF bundle. Deps `google-adk[a2a]>=2.10,<3`, python-dotenv, pyyaml; ADK 2.11, a2a-sdk 1.2.3.
+- **B2 (second agent, 30%):** `sales_advisor` is an ADK `LlmAgent` (free design, not bound by the workshop's
+  one-LLM-node rule) with three tools over the OKF bundle (`sales_advisor/knowledge.py`): `list_knowledge`,
+  `search_knowledge`, `read_concept` (returns sources + OKF trust tier). Instruction: always look up before answering,
+  cite concept IDs (「來源：…」), show price formulas, decline off-topic. Verified: VIP × 10 boxes SP-001 →
+  650 × 0.80 = 520, total 5,200, sources products/SP-001 + policies/customer-levels + policies/pricing-computation;
+  "can a published quotation be edited?" → no, copy-on-write, sources quotation-lifecycle + copy-on-write.
+- **B3 (A2A, +20):** `quotation_agent` is a `RemoteA2aAgent` sub-agent (pattern confirmed via the ADK Docs MCP,
+  https://adk.dev/a2a/quickstart-consuming). Verified in Docker: advisor → `POST /a2a/quotation_agent` on the agent
+  container → quotation details with link; convert-to-order → ORD-20261024-002 + order link (29 s warm, 101 s cold).
+  Problems found:
+  | Problem | Fix |
+  |---|---|
+  | `Agent card RPC URL must have the same origin as the location the card was fetched from` | Card fetched from `localhost`, card advertised `127.0.0.1` → use `127.0.0.1` on both sides locally |
+  | `Agent card URL must use https, or http on a loopback host: http://agent:8080/...` (Docker) | ADK only fetches cards over https/loopback; a card from a local file is trusted by the deployer → saved the card the agent serves in Docker to `advisor/a2a/quotation_agent_card.json`, read via `QUOTATION_AGENT_CARD` |
+  | Quotation agent's card advertised `http://0.0.0.0:8000` | Compose sets `APP_URL=http://agent:8080` on the `agent` service |
+  | Local (Windows) runs hung in model calls; `agents-cli run` → ConnectionResetError | Same Windows-host issue as the eval hangs: streaming requests hang, non-streaming always worked; moved the demo to Docker (Linux) where it works |
+- **B4 (Docker + docs):** `advisor/Dockerfile` (same style as agent), Compose service `advisor` on host port **8090**
+  (ADK web UI `http://localhost:8090/dev-ui/?app=sales_advisor`), `depends_on: agent`.
+  `docker-compose.vertex.yml` (optional) switches agent + advisor to Vertex AI by mounting the gcloud ADC file
+  read-only (`${APPDATA}/gcloud/application_default_credentials.json` → `/secrets/adc.json`); root `.env` got
+  `GOOGLE_CLOUD_PROJECT` and `AGENT_MODEL=gemini-3.8-flash`. `advisor/README.md` (EN + 中文). 7 unit tests pass;
+  scaffold demo tests/eval removed. Seed reloaded after testing.
